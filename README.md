@@ -1,4 +1,4 @@
-# 计算机图形学第二次大实验 - 实时阴影渲染系统
+# 计算机图形学第二次大实验 
 
 > **项目代号**: ShadowMapping-2026S  
 > **技术栈**: Modern C++17 + OpenGL 3.3 Core Profile  
