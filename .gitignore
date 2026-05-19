@@ -1,0 +1,68 @@
+# ============================================
+# C++ 图形学项目 Git 忽略规则
+# ============================================
+
+# 构建输出目录
+build/
+cmake-build-*/
+out/
+Debug/
+Release/
+x64/
+x86/
+
+# IDE 配置文件
+.vscode/
+.idea/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+.vs/
+
+# 编译生成的文件
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+
+# CMake 生成的文件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# 日志文件
+*.log
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+*~
+
+# 大型二进制资源（可选，根据团队约定）
+# 如果模型和纹理文件较大，可以考虑不提交到 Git
+# 而是提供下载链接或使用 Git LFS
+# models/*.obj
+# models/*.fbx
+# textures/*.png
+# textures/*.jpg
+
+# 但不要忽略 shaders 目录中的源码文件
+# 着色器代码应该提交到版本控制
