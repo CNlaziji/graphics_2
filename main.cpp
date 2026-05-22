@@ -23,6 +23,9 @@
 // 核心阴影管线封装
 #include "ShadowPipeline.hpp"
 
+// 模型加载系统（成员B）
+#include "Model.hpp"
+
 // ============================================================================
 // 窗口配置
 // ============================================================================
@@ -34,101 +37,310 @@ constexpr const char* WINDOW_TITLE = "Computer Graphics Lab - Shadow Mapping";
 // 前向声明：着色器类占位（由组员实现或集成）
 // ============================================================================
 
+// ============================================================================
+// 内嵌着色器源码（无需外部 shader 文件即可运行）
+// ============================================================================
+
+// 阴影深度顶点着色器
+const char* kShadowVertSrc = R"glsl(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 lightSpaceMatrix;
+uniform mat4 model;
+void main() {
+    gl_Position = lightSpaceMatrix * model * vec4(aPos, 1.0);
+}
+)glsl";
+
+// 阴影深度片元着色器（仅写深度，无颜色输出）
+const char* kShadowFragSrc = R"glsl(
+#version 330 core
+void main() {
+    // 深度自动写入，无需手动输出颜色
+}
+)glsl";
+
+// 主场景顶点着色器
+const char* kSceneVertSrc = R"glsl(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aTexCoords;
+
+out vec3 FragPos;
+out vec3 Normal;
+out vec2 TexCoords;
+out vec4 FragPosLightSpace;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform mat4 lightSpaceMatrix;
+
+void main() {
+    vec4 worldPos = model * vec4(aPos, 1.0);
+    FragPos = worldPos.xyz;
+    Normal = mat3(transpose(inverse(model))) * aNormal;
+    TexCoords = aTexCoords;
+    FragPosLightSpace = lightSpaceMatrix * worldPos;
+    gl_Position = projection * view * worldPos;
+}
+)glsl";
+
+// 主场景片元着色器：Blinn-Phong 光照 + PCF 阴影
+const char* kSceneFragSrc = R"glsl(
+#version 330 core
+out vec4 FragColor;
+
+in vec3 FragPos;
+in vec3 Normal;
+in vec2 TexCoords;
+in vec4 FragPosLightSpace;
+
+uniform sampler2D shadowMap;
+uniform vec3 cameraPos;
+
+struct DirLight {
+    vec3 direction;
+    vec3 color;
+    float intensity;
+};
+uniform DirLight dirLight;
+
+struct PointLight {
+    vec3 position;
+    vec3 color;
+    float constant;
+    float linear;
+    float quadratic;
+};
+uniform PointLight pointLight;
+
+struct SpotLight {
+    vec3 position;
+    vec3 direction;
+    vec3 color;
+    float cutOff;
+    float outerCutOff;
+    float constant;
+    float linear;
+    float quadratic;
+};
+uniform SpotLight spotLight;
+
+uniform vec3 ambientColor;
+uniform float ambientIntensity;
+uniform float shininess;
+uniform vec3 objectColor;
+
+float ShadowCalculation(vec4 fragPosLightSpace) {
+    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+    projCoords = projCoords * 0.5 + 0.5;
+    if (projCoords.z > 1.0) return 0.0;
+    float closestDepth = texture(shadowMap, projCoords.xy).r;
+    float currentDepth = projCoords.z;
+    float bias = 0.005;
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float pcfDepth = texture(shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
+            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+        }
+    }
+    return shadow / 9.0;
+}
+
+vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir) {
+    vec3 lightDir = normalize(-light.direction);
+    float diff = max(dot(normal, lightDir), 0.0);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
+    return light.color * light.intensity * (diff + spec);
+}
+
+vec3 CalcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
+    vec3 lightDir = normalize(light.position - fragPos);
+    float diff = max(dot(normal, lightDir), 0.0);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
+    float dist = length(light.position - fragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * dist + light.quadratic * dist * dist);
+    return light.color * attenuation * (diff + spec);
+}
+
+vec3 CalcSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir) {
+    vec3 lightDir = normalize(light.position - fragPos);
+    float diff = max(dot(normal, lightDir), 0.0);
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
+    float dist = length(light.position - fragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * dist + light.quadratic * dist * dist);
+    float theta = dot(lightDir, normalize(-light.direction));
+    float epsilon = light.cutOff - light.outerCutOff;
+    float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+    return light.color * attenuation * intensity * (diff + spec);
+}
+
+void main() {
+    vec3 norm = normalize(Normal);
+    vec3 viewDir = normalize(cameraPos - FragPos);
+    vec3 result = ambientColor * ambientIntensity;
+    float shadow = ShadowCalculation(FragPosLightSpace);
+    result += (1.0 - shadow) * CalcDirLight(dirLight, norm, viewDir);
+    result += CalcPointLight(pointLight, norm, FragPos, viewDir);
+    result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
+    result *= objectColor;
+    FragColor = vec4(result, 1.0);
+}
+)glsl";
+
 /**
  * @class Shader
- * @brief 着色器程序封装（占位符，实际由组员提供完整实现）
- * 
- * 预期接口：
- * - Shader(const char* vertexPath, const char* fragmentPath)
- * - void use()
- * - void setMat4(const std::string& name, const glm::mat4& value)
- * - void setVec3(const std::string& name, const glm::vec3& value)
- * - void setVec3(const std::string& name, float x, float y, float z)
- * - void setFloat(const std::string& name, float value)
- * - void setInt(const std::string& name, int value)
+ * @brief 着色器程序封装
+ *
+ * 优先从文件加载着色器，若文件不存在则使用内嵌默认着色器。
+ * 内嵌着色器支持：shadow_depth(.vert/.frag), scene(.vert/.frag)
  */
 class Shader {
 public:
-    // 占位符构造函数
-    Shader(const char* vertexPath, const char* fragmentPath) {
-        // TODO: 组员实现着色器编译和链接
-        std::cout << "[Shader] Loading: " << vertexPath << ", " << fragmentPath << std::endl;
-        // 临时创建空程序
+    Shader(const char* vertexPath, const char* fragmentPath) : m_id(0) {
+        std::cout << "[Shader] 加载: " << vertexPath << ", " << fragmentPath << std::endl;
+
+        std::string vSrc, fSrc;
+        std::string vPath(vertexPath), fPath(fragmentPath);
+
+        // 尝试从文件读取，失败则使用内嵌默认着色器
+        vSrc = ReadFileOrEmbed(vPath);
+        fSrc = ReadFileOrEmbed(fPath);
+        if (vSrc.empty() || fSrc.empty()) {
+            std::cerr << "[Shader] 错误：无法获取着色器源码" << std::endl;
+            m_id = glCreateProgram();
+            return;
+        }
+
+        unsigned int vert = CompileShader(GL_VERTEX_SHADER, vSrc);
+        unsigned int frag = CompileShader(GL_FRAGMENT_SHADER, fSrc);
+
+        if (vert == 0 || frag == 0) {
+            if (vert) glDeleteShader(vert);
+            if (frag) glDeleteShader(frag);
+            m_id = glCreateProgram();
+            return;
+        }
+
         m_id = glCreateProgram();
-    }
-    
-    ~Shader() {
-        if (m_id != 0) {
+        glAttachShader(m_id, vert);
+        glAttachShader(m_id, frag);
+        glLinkProgram(m_id);
+
+        GLint success;
+        glGetProgramiv(m_id, GL_LINK_STATUS, &success);
+        if (!success) {
+            char infoLog[512];
+            glGetProgramInfoLog(m_id, 512, nullptr, infoLog);
+            std::cerr << "[Shader] 链接失败:\n" << infoLog << std::endl;
             glDeleteProgram(m_id);
+            m_id = glCreateProgram();
         }
+
+        glDeleteShader(vert);
+        glDeleteShader(frag);
     }
-    
-    void use() const {
-        glUseProgram(m_id);
+
+    ~Shader() {
+        if (m_id != 0) glDeleteProgram(m_id);
     }
-    
+
+    void use() const { glUseProgram(m_id); }
+
+    bool IsValid() const {
+        if (m_id == 0) return false;
+        GLint linked = 0;
+        glGetProgramiv(m_id, GL_LINK_STATUS, &linked);
+        return linked == GL_TRUE;
+    }
+
+    unsigned int GetID() const { return m_id; }
+
     void setMat4(const std::string& name, const glm::mat4& value) const {
-        GLint location = glGetUniformLocation(m_id, name.c_str());
-        if (location != -1) {
-            glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(value));
-        }
+        GLint loc = glGetUniformLocation(m_id, name.c_str());
+        if (loc != -1) glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(value));
     }
-    
+
     void setVec3(const std::string& name, const glm::vec3& value) const {
-        GLint location = glGetUniformLocation(m_id, name.c_str());
-        if (location != -1) {
-            glUniform3fv(location, 1, glm::value_ptr(value));
-        }
+        GLint loc = glGetUniformLocation(m_id, name.c_str());
+        if (loc != -1) glUniform3fv(loc, 1, glm::value_ptr(value));
     }
-    
+
     void setVec3(const std::string& name, float x, float y, float z) const {
         setVec3(name, glm::vec3(x, y, z));
     }
-    
+
     void setFloat(const std::string& name, float value) const {
-        GLint location = glGetUniformLocation(m_id, name.c_str());
-        if (location != -1) {
-            glUniform1f(location, value);
-        }
+        GLint loc = glGetUniformLocation(m_id, name.c_str());
+        if (loc != -1) glUniform1f(loc, value);
     }
-    
+
     void setInt(const std::string& name, int value) const {
-        GLint location = glGetUniformLocation(m_id, name.c_str());
-        if (location != -1) {
-            glUniform1i(location, value);
-        }
+        GLint loc = glGetUniformLocation(m_id, name.c_str());
+        if (loc != -1) glUniform1i(loc, value);
     }
 
 private:
-    unsigned int m_id = 0;
+    unsigned int m_id;
+
+    unsigned int CompileShader(GLenum type, const std::string& source) {
+        unsigned int shader = glCreateShader(type);
+        const char* src = source.c_str();
+        glShaderSource(shader, 1, &src, nullptr);
+        glCompileShader(shader);
+
+        GLint success;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+        if (!success) {
+            char infoLog[512];
+            glGetShaderInfoLog(shader, 512, nullptr, infoLog);
+            std::cerr << "[Shader] 编译失败 ("
+                      << (type == GL_VERTEX_SHADER ? "顶点" : "片元") << "):\n"
+                      << infoLog << std::endl;
+            glDeleteShader(shader);
+            return 0;
+        }
+        return shader;
+    }
+
+    std::string ReadFileOrEmbed(const std::string& path) {
+        // 尝试读取外部文件
+        std::ifstream file(path);
+        if (file.is_open()) {
+            std::stringstream ss;
+            ss << file.rdbuf();
+            std::cout << "[Shader] 从文件读取: " << path << std::endl;
+            return ss.str();
+        }
+
+        // 文件不存在，使用内嵌默认着色器
+        std::cout << "[Shader] 使用内嵌默认着色器: " << path << std::endl;
+
+        // 提取文件名（不含路径）
+        size_t slash = path.find_last_of("/\\");
+        std::string filename = (slash != std::string::npos) ? path.substr(slash + 1) : path;
+
+        if (filename.find("shadow_depth.vert") != std::string::npos) return kShadowVertSrc;
+        if (filename.find("shadow_depth.frag") != std::string::npos) return kShadowFragSrc;
+        if (filename.find("scene.vert") != std::string::npos) return kSceneVertSrc;
+        if (filename.find("scene.frag") != std::string::npos) return kSceneFragSrc;
+
+        std::cerr << "[Shader] 未知着色器文件: " << path << std::endl;
+        return "";
+    }
 };
 
 // ============================================================================
-// 前向声明：模型类占位（由组员实现或集成）
+// 模型类：已由 Model.hpp 提供完整实现（成员B）
+// 详见 graphics_2/Model.hpp
 // ============================================================================
-
-/**
- * @class Model
- * @brief 3D 模型加载与渲染封装（占位符，实际由组员提供完整实现）
- * 
- * 预期接口：
- * - Model(const char* path)  // 从文件加载模型
- * - void Draw(Shader& shader)  // 使用指定着色器绘制模型
- */
-class Model {
-public:
-    // 占位符构造函数
-    Model(const char* path) {
-        // TODO: 组员实现模型加载（如使用 Assimp 库）
-        std::cout << "[Model] Loading: " << path << std::endl;
-    }
-    
-    void Draw(Shader& shader) {
-        // TODO: 组员实现模型绘制
-        // 包括绑定 VAO、设置顶点属性、调用 glDrawElements 等
-        (void)shader; // 避免未使用参数警告
-    }
-};
 
 // ============================================================================
 // 前向声明：相机类占位（由组员实现或集成）
@@ -181,7 +393,7 @@ std::unique_ptr<Shader> g_sceneShader;   // 第二通路：主场景着色器
 std::unique_ptr<Camera> g_camera;
 
 // 场景模型（示例）
-std::unique_ptr<Model> g_sceneModel;
+// 注：已替换为 g_sceneObjects 容器（见下方成员B场景物体管理）
 
 // 光源参数
 struct DirectionalLight {
@@ -209,6 +421,31 @@ struct SpotLight {
     float quadratic = 0.032f;
 } g_spotLight;
 
+// ============================================================================
+// 场景模型系统（成员B）
+// ============================================================================
+
+/// 场景物体：模型 + 世界变换 + 材质颜色
+struct SceneObject {
+    std::unique_ptr<Model> model;
+    glm::vec3 position = glm::vec3(0.0f);
+    glm::vec3 rotation = glm::vec3(0.0f);  // 欧拉角（度数）
+    glm::vec3 scale = glm::vec3(1.0f);
+    glm::vec3 color = glm::vec3(0.7f);     // 物体颜色
+
+    glm::mat4 GetModelMatrix() const {
+        glm::mat4 m(1.0f);
+        m = glm::translate(m, position);
+        m = glm::rotate(m, glm::radians(rotation.y), glm::vec3(0, 1, 0));
+        m = glm::rotate(m, glm::radians(rotation.x), glm::vec3(1, 0, 0));
+        m = glm::rotate(m, glm::radians(rotation.z), glm::vec3(0, 0, 1));
+        m = glm::scale(m, scale);
+        return m;
+    }
+};
+
+std::vector<SceneObject> g_sceneObjects;   ///< 场景所有物体
+
 // 时间控制
 float g_deltaTime = 0.0f;
 float g_lastFrame = 0.0f;
@@ -234,6 +471,11 @@ void FramebufferSizeCallback(GLFWwindow* window, int width, int height);
 // ============================================================================
 
 int main() {
+    // 设置控制台输出为 UTF-8（解决 PowerShell/CMD 中文乱码）
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+
     try {
         // 1. 初始化 GLFW
         if (!InitializeGLFW()) {
@@ -345,36 +587,131 @@ bool InitializeResources() {
             "shaders/scene.frag"    // 片元着色器路径
         );
         
-        // 3. 初始化相机
+        // 3. 验证着色器
+        if (!g_shadowShader->IsValid()) {
+            std::cerr << "[Error] 阴影着色器编译/链接失败!" << std::endl;
+        }
+        if (!g_sceneShader->IsValid()) {
+            std::cerr << "[Error] 场景着色器编译/链接失败! 程序ID="
+                      << g_sceneShader->GetID() << std::endl;
+        } else {
+            std::cout << "[Shader] 场景着色器验证通过 (ID="
+                      << g_sceneShader->GetID() << ")" << std::endl;
+        }
+
+        // 4. 初始化相机
         g_camera = std::make_unique<Camera>();
         
         // ============================================================================
-        // [插槽 0] 成员 B & C - 资源初始化
+        // [插槽 0] 成员 B - 模型资源初始化
         // ============================================================================
-        // TODO: 在此加载所有模型和纹理资源
-        //
-        // 成员 B 任务：
-        // 1. 创建场景模型容器（如 std::vector<std::unique_ptr<Model>>）
-        // 2. 加载所有模型文件（≥5个）：
-        //    - g_sceneModels.push_back(std::make_unique<Model>("models/building.obj"));
-        //    - g_sceneModels.push_back(std::make_unique<Model>("models/props/box.obj"));
-        //    - ... 其他模型
-        // 3. 设置每个模型的初始变换（位置、旋转、缩放）
-        //
-        // 成员 C 任务：
-        // 1. 加载所有纹理资源：
-        //    - 金属纹理: "textures/metal.png"
-        //    - 木头纹理: "textures/wood.png"
-        //    - 石料纹理: "textures/stone.png"
-        //    - 发光体纹理: "textures/glow.png"
-        // 2. 创建材质对象，关联纹理ID
-        // 3. 将材质分配给对应模型
-        //
-        // 注意：所有路径都是相对于项目根目录的相对路径！
-        // ============================================================================
-        
-        // 4. 加载场景模型（示例占位）
-        // g_sceneModel = std::make_unique<Model>("models/scene.obj");
+        // 使用程序化几何体创建 5+ 个场景模型
+        // 坐标约定：Y轴朝上，XZ为地面平面
+
+        std::cout << "\n[成员B] 初始化场景模型..." << std::endl;
+
+        // 1. 地面 - 大型平面（接受阴影）
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreatePlane()),
+            glm::vec3(0.0f, -1.0f, 0.0f),   // 位置：原点下方
+            glm::vec3(0.0f),
+            glm::vec3(20.0f, 1.0f, 20.0f),  // 20x20大平面
+            glm::vec3(0.5f, 0.5f, 0.5f)     // 灰色地面
+        });
+        std::cout << "  [1/7] 地面平面已创建" << std::endl;
+
+        // 2. 主体建筑 - 大型立方体
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateCube()),
+            glm::vec3(0.0f, 0.0f, 0.0f),    // 原点位置
+            glm::vec3(0.0f),
+            glm::vec3(2.0f, 3.0f, 2.0f),    // 宽2 高3 深2
+            glm::vec3(0.8f, 0.6f, 0.4f)     // 沙色建筑
+        });
+        std::cout << "  [2/7] 主体建筑已创建" << std::endl;
+
+        // 3. 建筑顶部 - 四棱锥屋顶
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreatePyramid()),
+            glm::vec3(0.0f, 2.0f, 0.0f),    // 建筑顶部
+            glm::vec3(0.0f),
+            glm::vec3(1.5f, 1.5f, 1.5f),
+            glm::vec3(0.7f, 0.2f, 0.1f)     // 红棕色屋顶
+        });
+        std::cout << "  [3/7] 金字塔屋顶已创建" << std::endl;
+
+        // 4. 柱子（圆柱体）x2 - 建筑前方两侧
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateCylinder(24)),
+            glm::vec3(-2.5f, -0.2f, 2.0f),
+            glm::vec3(0.0f),
+            glm::vec3(0.3f, 2.0f, 0.3f),
+            glm::vec3(0.9f, 0.9f, 0.8f)     // 浅色石柱
+        });
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateCylinder(24)),
+            glm::vec3(2.5f, -0.2f, 2.0f),
+            glm::vec3(0.0f),
+            glm::vec3(0.3f, 2.0f, 0.3f),
+            glm::vec3(0.9f, 0.9f, 0.8f)
+        });
+        std::cout << "  [4/7] 石柱×2 已创建" << std::endl;
+
+        // 5. 装饰球体 - 建筑前方
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateSphere(36, 18)),
+            glm::vec3(0.0f, 0.5f, 3.0f),
+            glm::vec3(0.0f),
+            glm::vec3(0.6f, 0.6f, 0.6f),
+            glm::vec3(0.3f, 0.5f, 0.8f)     // 蓝紫色球体
+        });
+        std::cout << "  [5/7] 装饰球体已创建" << std::endl;
+
+        // 6. 道具箱子 - 小立方体（建筑侧面）
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateCube()),
+            glm::vec3(3.5f, -0.3f, 0.0f),
+            glm::vec3(0.0f, 30.0f, 0.0f),   // 略微旋转
+            glm::vec3(0.8f, 0.6f, 0.8f),
+            glm::vec3(0.6f, 0.3f, 0.2f)     // 棕色箱子
+        });
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateCube()),
+            glm::vec3(3.5f, 0.3f, 0.0f),
+            glm::vec3(0.0f, 15.0f, 0.0f),
+            glm::vec3(0.7f, 0.5f, 0.7f),
+            glm::vec3(0.6f, 0.3f, 0.2f)
+        });
+        std::cout << "  [6/7] 道具箱子×2 已创建" << std::endl;
+
+        // 7. 后方装饰 - 圆锥（树/尖塔）
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateCone(24)),
+            glm::vec3(-3.0f, -0.5f, -2.5f),
+            glm::vec3(0.0f),
+            glm::vec3(0.5f, 1.5f, 0.5f),
+            glm::vec3(0.2f, 0.7f, 0.3f)     // 绿色圆锥
+        });
+        g_sceneObjects.push_back({
+            std::make_unique<Model>(Model::CreateCone(24)),
+            glm::vec3(3.0f, -0.5f, -2.5f),
+            glm::vec3(0.0f),
+            glm::vec3(0.5f, 1.5f, 0.5f),
+            glm::vec3(0.2f, 0.7f, 0.3f)
+        });
+        std::cout << "  [7/7] 装饰圆锥×2 已创建" << std::endl;
+
+        std::cout << "[成员B] 场景模型初始化完成，共 "
+                  << g_sceneObjects.size() << " 个物体\n" << std::endl;
+
+        // 注：若存在 .obj 模型文件，可通过以下方式加载：
+        // g_sceneObjects.push_back({
+        //     std::make_unique<Model>(Model("models/building.obj")),
+        //     glm::vec3(0.0f, 0.0f, 0.0f),
+        //     glm::vec3(0.0f),
+        //     glm::vec3(1.0f),
+        //     glm::vec3(0.7f)
+        // });
         
         std::cout << "[Resources] All resources initialized successfully" << std::endl;
         return true;
@@ -386,8 +723,10 @@ bool InitializeResources() {
 }
 
 void Shutdown() {
+    // 清理场景物体
+    g_sceneObjects.clear();
+
     // 智能指针会自动清理资源
-    g_sceneModel.reset();
     g_camera.reset();
     g_sceneShader.reset();
     g_shadowShader.reset();
@@ -411,23 +750,48 @@ void Shutdown() {
 
 void RenderLoop() {
     std::cout << "[RenderLoop] Starting main render loop..." << std::endl;
-    
+
+    // 帧率统计变量
+    int   frameCount = 0;
+    double lastFpsTime = glfwGetTime();
+
     while (!glfwWindowShouldClose(g_window)) {
         // 1. 计算帧时间
         UpdateDeltaTime();
-        
+
         // 2. 处理输入
         ProcessInput();
-        
+
         // ================================================================
         // 双通路渲染流程 (Dual-Pass Rendering)
         // ================================================================
-        
+
         // 第一通路：生成阴影深度图
         ShadowPass();
-        
+
         // 第二通路：主场景光照渲染（包含阴影计算）
         LightingPass();
+
+        // ================================================================
+        // FPS 诊断
+        // ================================================================
+        frameCount++;
+        double now = glfwGetTime();
+        if (now - lastFpsTime >= 1.0) {
+            double fps = frameCount / (now - lastFpsTime);
+            std::string title = "CG Lab2 - Shadow Mapping | FPS: "
+                              + std::to_string(static_cast<int>(fps));
+            glfwSetWindowTitle(g_window, title.c_str());
+            std::cerr << "[FPS] " << static_cast<int>(fps) << std::endl;
+            frameCount = 0;
+            lastFpsTime = now;
+
+            // 检查 OpenGL 错误
+            GLenum err = glGetError();
+            if (err != GL_NO_ERROR) {
+                std::cerr << "[GL Error] 0x" << std::hex << err << std::dec << std::endl;
+            }
+        }
         
         // ============================================================================
         // [插槽 4] 成员 E - ImGui GUI 系统
@@ -569,16 +933,17 @@ void ShadowPass() {
  * 进行阴影检测，实现动态阴影效果。
  */
 void LightingPass() {
+
     // ------------------------------------------------------------------------
     // Step 1: 恢复默认帧缓冲并设置视口
     // ------------------------------------------------------------------------
     glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
-    
+
     // ------------------------------------------------------------------------
     // Step 2: 清除颜色和深度缓冲
     // ------------------------------------------------------------------------
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    
+
     // ------------------------------------------------------------------------
     // Step 3: 激活主场景着色器
     // ------------------------------------------------------------------------
@@ -607,7 +972,6 @@ void LightingPass() {
         g_dirLight.direction
     );
     
-    // 传入所有矩阵到着色器
     g_sceneShader->setMat4("projection", projection);
     g_sceneShader->setMat4("view", view);
     g_sceneShader->setMat4("model", model);
@@ -628,11 +992,11 @@ void LightingPass() {
     
     // 告知着色器阴影贴图位于纹理单元 1
     g_sceneShader->setInt("shadowMap", 1);
-    
+
     // ------------------------------------------------------------------------
     // Step 6: 设置多光源参数
     // ------------------------------------------------------------------------
-    
+
     // 方向光（产生阴影的光源）
     g_sceneShader->setVec3("dirLight.direction", g_dirLight.direction);
     g_sceneShader->setVec3("dirLight.color", g_dirLight.color);
@@ -654,7 +1018,14 @@ void LightingPass() {
     g_sceneShader->setFloat("spotLight.constant", g_spotLight.constant);
     g_sceneShader->setFloat("spotLight.linear", g_spotLight.linear);
     g_sceneShader->setFloat("spotLight.quadratic", g_spotLight.quadratic);
-    
+
+    // ------------------------------------------------------------------------
+    // Step 6.5: 设置环境光与材质参数
+    // ------------------------------------------------------------------------
+    g_sceneShader->setVec3("ambientColor", glm::vec3(1.0f, 1.0f, 1.0f));
+    g_sceneShader->setFloat("ambientIntensity", 0.35f);  // 提高环境光，避免场景过暗
+    g_sceneShader->setFloat("shininess", 32.0f);
+
     // ------------------------------------------------------------------------
     // Step 7: 渲染完整场景（带光照和阴影）
     // ------------------------------------------------------------------------
@@ -674,48 +1045,21 @@ void LightingPass() {
  */
 void RenderScene(Shader& shader) {
     // ============================================================================
-    // [插槽 1] 成员 B - 模型渲染系统
+    // [插槽 1 & 2] 成员 B - 模型渲染系统 + 成员C - 材质系统
     // ============================================================================
-    // TODO: 在此渲染所有场景模型
-    // 
-    // 任务清单：
-    // 1. 遍历场景中的所有模型对象（建议存储在 std::vector<Model> 中）
-    // 2. 为每个模型设置 model 矩阵（位置、旋转、缩放）
-    // 3. 调用 model.Draw(shader) 进行渲染
-    //
-    // 示例代码：
-    // for (auto& model : g_sceneModels) {
-    //     shader.setMat4("model", model.GetTransform());
-    //     model.Draw(shader);
-    // }
-    //
-    // 注意：确保已加载至少 5 个独立模型（建筑、道具、设备等）
-    // ============================================================================
-    
-    
-    // ============================================================================
-    // [插槽 2] 成员 C - 材质与纹理系统
-    // ============================================================================
-    // TODO: 在此绑定材质和纹理
-    //
-    // 任务清单：
-    // 1. 根据模型类型绑定对应的纹理（金属、木头、石料、发光体）
-    // 2. 设置材质相关的 uniform 参数：
-    //    - material.diffuse  (漫反射贴图)
-    //    - material.specular (高光贴图，可选)
-    //    - material.shininess (光泽度)
-    // 3. 激活并绑定纹理单元
-    //
-    // 示例代码：
-    // glActiveTexture(GL_TEXTURE0);
-    // glBindTexture(GL_TEXTURE_2D, material.diffuseMap);
-    // shader.setInt("material.diffuse", 0);
-    // shader.setFloat("material.shininess", 32.0f);
-    //
-    // 注意：纹理路径使用相对路径 "textures/wood.png"
-    // ============================================================================
-    
-    (void)shader; // 避免未使用参数警告（实现后删除）
+
+    for (const auto& obj : g_sceneObjects) {
+        // 设置物体世界变换矩阵
+        shader.setMat4("model", obj.GetModelMatrix());
+
+        // 设置物体颜色（基础材质参数）
+        shader.setVec3("objectColor", obj.color);
+
+        // 绘制模型
+        if (obj.model) {
+            obj.model->Draw(shader);
+        }
+    }
 }
 
 // ============================================================================

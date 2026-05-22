@@ -199,6 +199,13 @@ int GLAD_GL_VERSION_3_1;
 int GLAD_GL_VERSION_3_2;
 int GLAD_GL_VERSION_3_3;
 
+/* find_coreGL 需要调用 opengl32.dll 中真正的 glGetString 函数，
+   但 glad.h 将其宏定义为 glad_glGetString（此时尚未加载）。
+   因此需要取消宏定义并使用系统 DLL 中的原生函数。 */
+#undef glGetString
+/* 原生 glGetString 声明（glad.h 阻止了 GL/gl.h 的包含） */
+const GLubyte* APIENTRY glGetString(GLenum name);
+
 static int find_coreGL(void) {
     int major = 0, minor = 0;
     const char* version = (const char*)glGetString(GL_VERSION);
@@ -207,6 +214,9 @@ static int find_coreGL(void) {
     }
     return major * 10 + minor;
 }
+
+/* 恢复宏定义，后续代码继续使用 glad_glGetString 函数指针 */
+#define glGetString glad_glGetString
 
 static void load_GL_VERSION_1_0(GLADloadproc load) {
     glad_glClear = (PFNGLCLEARPROC)load("glClear");
@@ -234,6 +244,8 @@ static void load_GL_VERSION_1_1(GLADloadproc load) {
     glad_glTexParameteri = (PFNGLTEXPARAMETERIPROC)load("glTexParameteri");
     glad_glTexParameterfv = (PFNGLTEXPARAMETERFVPROC)load("glTexParameterfv");
     glad_glDeleteTextures = (PFNGLDELETETEXTURESPROC)load("glDeleteTextures");
+    /* 修复: glActiveTexture 被遗漏，需手动补充加载 */
+    glad_glActiveTexture = (PFNGLACTIVETEXTUREPROC)load("glActiveTexture");
 }
 
 static void load_GL_VERSION_1_5(GLADloadproc load) {
