@@ -12,6 +12,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/custom
     ${CMAKE_CURRENT_SOURCE_DIR}/glm
 )
 
@@ -20,8 +21,9 @@ set(SOURCE_FILES
     main.cpp
     src/glad.c
     src/stb_image_impl.cpp  # 成员 C：stb_image 实现编译单元
-    ShadowPipeline.hpp
-    Texture.hpp
+    include/custom/ShadowPipeline.hpp
+    include/custom/Texture.hpp
+    include/custom/Model.hpp
 )
 
 # 创建可执行文件
