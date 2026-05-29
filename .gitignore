@@ -22,7 +22,7 @@ x86/
 *.VC.opendb
 .vs/
 
-# 编译生成的文件（但 lib/ 下的第三方库文件需要提交）
+# 编译生成的文件
 *.exe
 *.dll
 *.lib
@@ -34,11 +34,6 @@ x86/
 *.pdb
 *.ilk
 *.exp
-
-# 保留 lib/ 目录下的第三方库文件
-!lib/*.dll
-!lib/*.lib
-!lib/*.a
 
 # CMake 生成的文件
 CMakeCache.txt

@@ -5,11 +5,6 @@ project(GraphicsLab_ShadowMapping C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# MSVC: 使用 UTF-8 编码支持中文注释
-if(MSVC)
-    add_compile_options(/utf-8)
-endif()
-
 # 生成 compile_commands.json 供 IntelliSense 使用
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -24,8 +19,9 @@ include_directories(
 set(SOURCE_FILES
     main.cpp
     src/glad.c
+    src/stb_image_impl.cpp  # 成员 C：stb_image 实现编译单元
     ShadowPipeline.hpp
-    Model.hpp
+    Texture.hpp
 )
 
 # 创建可执行文件
