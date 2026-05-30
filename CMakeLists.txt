@@ -24,6 +24,7 @@ set(SOURCE_FILES
     include/custom/ShadowPipeline.hpp
     include/custom/Texture.hpp
     include/custom/Model.hpp
+        include/custom/camera.h
 )
 
 # 创建可执行文件

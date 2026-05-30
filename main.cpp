@@ -26,6 +26,9 @@
 // 成员 C：纹理与材质系统
 #include "Texture.hpp"
 
+//成员 D：摄像头系统
+#include "custom/camera.h"
+
 // ============================================================================
 // 窗口配置
 // ============================================================================
@@ -134,43 +137,6 @@ public:
 };
 
 // ============================================================================
-// 前向声明：相机类占位（由组员实现或集成）
-// ============================================================================
-
-/**
- * @class Camera
- * @brief 相机控制封装（占位符，实际由组员提供完整实现）
- * 
- * 预期接口：
- * - glm::mat4 GetViewMatrix()  // 获取观察矩阵
- * - glm::vec3 GetPosition()    // 获取相机位置
- * - void ProcessInput(GLFWwindow* window, float deltaTime)  // 处理输入
- */
-class Camera {
-public:
-    glm::mat4 GetViewMatrix() const {
-        // TODO: 组员实现相机观察矩阵计算
-        // 临时返回一个默认观察矩阵
-        return glm::lookAt(
-            glm::vec3(0.0f, 5.0f, 10.0f),  // 相机位置
-            glm::vec3(0.0f, 0.0f, 0.0f),   // 观察目标
-            glm::vec3(0.0f, 1.0f, 0.0f)    // 上向量
-        );
-    }
-    
-    glm::vec3 GetPosition() const {
-        // TODO: 组员返回实际相机位置
-        return glm::vec3(0.0f, 5.0f, 10.0f);
-    }
-    
-    void ProcessInput(GLFWwindow* window, float deltaTime) {
-        // TODO: 组员实现相机移动控制（WASD、鼠标视角等）
-        (void)window;
-        (void)deltaTime;
-    }
-};
-
-// ============================================================================
 // 全局变量
 // ============================================================================
 
@@ -226,6 +192,39 @@ std::optional<Material> g_matStone;     ///< 石料材质
 std::optional<Material> g_matMetal;     ///< 金属材质
 std::optional<Material> g_matEmissive;  ///< 发光体材质
 std::optional<Material> g_matFloor;     ///< 地板材质
+
+// ============================================================================
+// 成员 D：鼠标控制相关的全局变量
+// ============================================================================
+float g_lastX = WINDOW_WIDTH / 2.0f;
+float g_lastY = WINDOW_HEIGHT / 2.0f;
+bool g_firstMouse = true;
+
+// 鼠标移动回调函数
+void MouseCallback(GLFWwindow* window, double xposIn, double yposIn) {
+    float xpos = static_cast<float>(xposIn);
+    float ypos = static_cast<float>(yposIn);
+
+    if (g_firstMouse) {
+        g_lastX = xpos;
+        g_lastY = ypos;
+        g_firstMouse = false;
+    }
+
+    float xoffset = xpos - g_lastX;
+    float yoffset = g_lastY - ypos; // 注意：Y坐标是从下往上的，所以是 last - current
+    g_lastX = xpos;
+    g_lastY = ypos;
+
+    if (g_camera) {
+        g_camera->ProcessMouseMovement(xoffset, yoffset);
+
+        std::cout << "\r[Camera Test] Yaw: " << g_camera->Yaw
+                  << " | Pitch: " << g_camera->Pitch
+                  << " | Front: (" << g_camera->Front.x << ", " << g_camera->Front.y << ", " << g_camera->Front.z << ")"
+                  << "          " << std::flush;
+    }
+}
 
 // ============================================================================
 // 函数声明
@@ -307,6 +306,10 @@ bool InitializeGLFW() {
     
     // 注册窗口大小变化回调
     glfwSetFramebufferSizeCallback(g_window, FramebufferSizeCallback);
+
+    // 注册鼠标回调并隐藏鼠标
+    glfwSetCursorPosCallback(g_window, MouseCallback);
+    glfwSetInputMode(g_window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     
     // 启用垂直同步
     glfwSwapInterval(1);
@@ -492,33 +495,18 @@ void ProcessInput() {
     // ============================================================================
     // [插槽 3] 成员 D - 相机与交互系统
     // ============================================================================
-    // TODO: 实现 FPS 漫游相机的完整输入处理
-    //
-    // 任务清单：
-    // 1. WASD 键盘移动：
-    //    - W: 前进，S: 后退，A: 左移，D: 右移
-    //    - 移动速度 = baseSpeed * g_deltaTime
-    //
-    // 2. 鼠标视角控制：
-    //    - 鼠标移动控制相机俯仰角(pitch)和偏航角(yaw)
-    //    - 限制俯仰角范围 [-89°, 89°]，防止万向锁
-    //    - 鼠标灵敏度可调（建议 0.1f）
-    //
-    // 3. 鼠标滚轮（可选）：
-    //    - 调整视野角度(FOV)，实现缩放效果
-    //
-    // 实现建议：
-    // - 在 Camera 类中实现 ProcessKeyboard() 和 ProcessMouseMovement()
-    // - 使用 glfwGetKey() 检测键盘状态
-    // - 使用 glfwSetCursorPosCallback() 设置鼠标回调
-    // - 使用 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED) 隐藏鼠标
-    //
-    // 参考：LearnOpenGL 的 Camera 章节
-    // ============================================================================
-    
-    // 委托相机处理 WASD 和鼠标输入（当前为占位实现）
     if (g_camera) {
-        g_camera->ProcessInput(g_window, g_deltaTime);
+        bool moved = false;
+        if (glfwGetKey(g_window, GLFW_KEY_W) == GLFW_PRESS) { g_camera->ProcessKeyboard(FORWARD, g_deltaTime); moved = true; }
+        if (glfwGetKey(g_window, GLFW_KEY_S) == GLFW_PRESS) { g_camera->ProcessKeyboard(BACKWARD, g_deltaTime); moved = true; }
+        if (glfwGetKey(g_window, GLFW_KEY_A) == GLFW_PRESS) { g_camera->ProcessKeyboard(LEFT, g_deltaTime); moved = true; }
+        if (glfwGetKey(g_window, GLFW_KEY_D) == GLFW_PRESS) { g_camera->ProcessKeyboard(RIGHT, g_deltaTime); moved = true; }
+
+        // 【临时测试代码】如果有移动，打印坐标
+        if (moved) {
+            std::cout << "\n[Camera Test] Pos: (" << g_camera->Position.x << ", "
+                      << g_camera->Position.y << ", " << g_camera->Position.z << ")" << std::endl;
+        }
     }
 }
 
@@ -620,7 +608,7 @@ void LightingPass() {
     g_sceneShader->setMat4("lightSpaceMatrix", lightSpaceMatrix);
     
     // 传入相机位置（用于光照计算）
-    g_sceneShader->setVec3("cameraPos", g_camera->GetPosition());
+    g_sceneShader->setVec3("cameraPos", g_camera->Position);
     
     // ------------------------------------------------------------------------
     // Step 5: 绑定阴影深度纹理
