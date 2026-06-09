@@ -12,9 +12,9 @@
 #define SHADOW_MAP_HEIGHT 2048
 
 // 光源视锥体配置（正交投影参数）
-#define LIGHT_ORTHO_SIZE 10.0f
+#define LIGHT_ORTHO_SIZE 60.0f
 #define LIGHT_NEAR_PLANE 1.0f
-#define LIGHT_FAR_PLANE 50.0f
+#define LIGHT_FAR_PLANE 200.0f
 
 /**
  * @class ShadowPipeline
@@ -143,17 +143,12 @@ public:
      * 4. 清空深度缓冲
      */
     void BindForWriting() {
-        // 保存当前视口尺寸以便后续恢复
         glGetIntegerv(GL_VIEWPORT, m_savedViewport);
-        
-        // 绑定阴影帧缓冲
         glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
-        
-        // 设置视口为阴影贴图分辨率
         glViewport(0, 0, SHADOW_MAP_WIDTH, SHADOW_MAP_HEIGHT);
-        
-        // 清空深度缓冲（准备写入新的深度信息）
         glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
     }
     
     /**
@@ -204,8 +199,7 @@ public:
         // 如果未指定光源位置，根据方向计算一个合适的位置
         glm::vec3 actualLightPos = lightPos;
         if (glm::length(lightPos) < 0.001f) {
-            // 默认将光源放置在距离原点一定距离的位置，沿光照方向的反方向
-            actualLightPos = -lightDir * 20.0f;
+            actualLightPos = target - lightDir * 80.0f;
         }
         
         // 计算光源的观察矩阵（LookAt）

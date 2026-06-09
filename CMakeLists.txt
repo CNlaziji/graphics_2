@@ -14,6 +14,9 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include/custom
     ${CMAKE_CURRENT_SOURCE_DIR}/glm
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/backends
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/GLFW
 )
 
 # 搜集源文件（main.cpp 和 glad.c 必须联合编译）
@@ -22,8 +25,14 @@ set(SOURCE_FILES
     src/glad.c
     src/stb_image_impl.cpp  # 成员 C：stb_image 实现编译单元
     include/custom/ShadowPipeline.hpp
-    include/custom/Texture.hpp
     include/custom/Model.hpp
+    # 成员 E：ImGui 库
+    third_party/imgui.cpp
+    third_party/imgui_draw.cpp
+    third_party/imgui_widgets.cpp
+    third_party/imgui_tables.cpp
+    third_party/backends/imgui_impl_glfw.cpp
+    third_party/backends/imgui_impl_opengl3.cpp
 )
 
 # 创建可执行文件
